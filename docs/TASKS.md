@@ -14,12 +14,12 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 |---|---|---|
 | T01 | `c76a2bc` (tracker), `d0446f6` (scaffold) | `uv sync` OK (CPython 3.12.16); `uv run caliper --help` renders; `ruff check` + `ruff format --check` + `mypy` clean; 2 tests pass. CI green on push/PR and on `main` after PR #1 merge (run 43717112766). |
 | T02 | `489c035` | `uv run pytest` — 38 passed (36 new config tests); `ruff check` + `ruff format --check` clean; `mypy` strict clean. Verified: user-over-preset deep merge; §9.7 contents binding for v1/v2/v3 + shared fixed answerer; fingerprint stable across reloads, differs across versions, and reacts to every binding-field change (parametrized, 17 fields); invalid configs rejected with key path. |
+| T03 | `arch/caliper/t03` → PR #4, squash merge `b643290` (code commit `2409b2a`) | `uv run pytest` — 63 passed (25 new: 19 unit accessors/schema/chunk tables incl. FTS sync + cosine; 6 integration trigger enforcement); `ruff check` + `ruff format --check` + `mypy` strict clean; sqlite-vec loads on Windows (`vec_version()`); vec0 cosine ≈ 0 on unit vector. |
 
 ## Doing
 
 | ID | Branch | Status |
 |---|---|---|
-| T03 | `arch/caliper/t03` | Implemented + verified (commit `2409b2a`); awaiting review before PR |
 | T04 | `arch/caliper/t04` (worktree) | Implemented + verified (`e6b5517`, `89e5423`); PR raised; **Ollama smoke leg deferred** (user decision 2026-11-16): Gemini leg passed live, Ollama leg re-run when Ollama is installed |
 
 ## Remaining
