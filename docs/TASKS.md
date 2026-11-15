@@ -10,11 +10,13 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 ## Done
 
-_(none yet)_
+| ID | Commit(s) | Verified |
+|---|---|---|
+| T01 | `c76a2bc` (tracker), `d0446f6` (scaffold) | `uv sync` OK (CPython 3.12.16); `uv run caliper --help` renders; `ruff check` + `ruff format --check` + `mypy` clean; 2 tests pass. *CI run on GitHub pending — first push.* |
 
 ## Doing
 
-_(none yet — next up: **T01**)_
+_(none — next up: **T02**, pending review)_
 
 ## Remaining
 
@@ -22,7 +24,6 @@ _(none yet — next up: **T01**)_
 
 | ID | Task | Files | Deps | Acceptance criteria (summary) |
 |---|---|---|---|---|
-| T01 | Scaffold package | `pyproject.toml`, `uv.lock`, `.python-version`, `.gitignore`, `.env.example`, `src/caliper/__init__.py`, `src/caliper/cli.py` (skeleton), `.github/workflows/ci.yml` | — | `uv sync && uv run caliper --help` works; ruff + mypy clean; CI green |
 | T02 | Config + fingerprint | `src/caliper/config.py`, `configs/caliper.sample.toml`, `configs/v1.toml`, `configs/v2.toml`, `configs/v3.toml` | T01 | Load merges user+preset; fingerprint stable on identical inputs, changes on every §7.8-listed field change; invalid config rejected with key path |
 | T03 | Schema + db accessors | `src/caliper/schema.sql`, `src/caliper/db.py` | T02 | `ensure_schema` idempotent; append-only triggers raise on UPDATE/DELETE of `runs`, `run_results`, `spot_checks`, `feedback`; `connect` loads sqlite-vec on Windows; accessors unit-tested |
 | T04 | Providers + live smoke test | `src/caliper/providers/*`, `scripts/smoke.py`, `tests/fakes.py` | T02 | `smoke.py` completes one chat call + one 768-dim embed per backend, demonstrates normalization, logs a 429 backoff; OQ1 verified and decision logged |
