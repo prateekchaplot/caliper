@@ -17,7 +17,10 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 ## Doing
 
-_(none — next up: **T03**, pending review; T04 is parallelizable with it per §14.3)_
+| ID | Branch | Status |
+|---|---|---|
+| T03 | `arch/caliper/t03` | Implemented + verified (commit `2409b2a`); awaiting review before PR |
+| T04 | `arch/caliper/t04` (worktree) | Implemented + verified (`e6b5517`, `89e5423`); PR raised; **Ollama smoke leg deferred** (user decision 2026-11-16): Gemini leg passed live, Ollama leg re-run when Ollama is installed |
 
 ## Remaining
 
@@ -91,3 +94,18 @@ _(none — next up: **T03**, pending review; T04 is parallelizable with it per �
 - **T02 — merge order (§11.2 ambiguity):** the version preset is loaded first and the user config is deep-merged *over* it (user wins on conflicts). Rationale: this is the only reading consistent with A2's fallback path ("flip `CALIPER_PROVIDER=ollama`" requires overriding `answer.model`/`embeddings.model`, which preset-wins would forbid since presets are committed). FR-10 comparability is not weakened: identity is enforced by the fingerprint gate (§7.8), computed from the resolved config, not by the merge order.
 - **T02 — `answer.prompt_template_sha256`:** presets carry the SHA-256 of the empty string as a placeholder until T11 stores the frozen prompt template file; T11 must replace it in all four TOML files (and in `PROMPT_TEMPLATE_SHA256_PLACEHOLDER` in `config.py`'s default) — the change is fingerprint-visible by construction.
 - **T02 — `high_confidence_threshold`:** not pinned in §9.7; initialized to 0.60 in all presets. To be re-verified alongside the refusal threshold at T16 before the V1 baseline run freezes it.
+- **T03 — FTS5 flavor (§8.3 wording ambiguity):** §8.3's "contentless external-content rowid-mapped to `chunk_id`" mixes two FTS5 flavors. Implemented as an **external-content** FTS5 table (`content='chunks_<fp8>'`, `content_rowid='chunk_id'`) — it stores no text itself (contentless in effect) but can serve `snippet()` from the content table, and AFTER INSERT/DELETE triggers keep it in sync with orphan removal (FR-02/T07). Smallest choice consistent with §7.4's "rowid-mapped" requirement; recorded here rather than re-derived later.
+- **T03 — `runs` lifecycle enforcement:** beyond §8.9's literal triggers, `ensure_schema` also installs `runs_insert_must_start_running` (INSERTs must use status `running`) so the §8.7 lifecycle ("running → terminal is the only permitted UPDATE") cannot be bypassed from row zero. `finish_run()` performs the single legal UPDATE (status + finished_at + summary_json in one statement while `OLD.status = 'running'`).
+- **T03 — `ingest_runs` upsert semantics:** "idempotent upsert" (§8.3) implemented as one row per fingerprint (UNIQUE) with `ON CONFLICT DO UPDATE` that resets `finished_at`/`pages_*` until the new run finishes; matches §8.1's "latest per fingerprint".
+- **T03 — chunk/embedding accessors added for T07/T08:** `insert_chunks` (returns ids, row-by-row since ids are reported), `get_chunks` (order-preserving, raises on missing id), `delete_chunks` (also deletes the vec rows; FTS follows via trigger), `insert_chunk_embeddings` (serializes via `sqlite_vec.serialize_float32`; validates 768 dims). No business logic added (§7.3).
+- **T03 — `db` is a leaf (§7.3):** it imports nothing from `config`; callers pass fingerprints/`fp8` suffixes as strings. Suffix is validated as 8 lowercase hex chars before any SQL interpolation.
+- **T03 — sqlite-vec binding detail:** embeddings must be bound as serialized float32 (the package's `serialize_float32`), not Python lists; `connect()` enables extension loading around `sqlite_vec.load()`.
+- **T04 — `tests/conftest.py` added (outside the T04 file list):** puts `tests/` on `sys.path` so `tests/fakes.py` is importable from every test directory (§15's "fakes are the suite's only mocks"); smallest mechanism that avoids editing T01-owned `pyproject.toml`. Owned by T04 from here on.
+- **T04 — `get_embeddings` rejects `embeddings.dimensions != 768` up front:** 768 is binding (§7.2, vec0 table in §8.3); failing before any model call is cheaper than corrupting the index.
+- **T04 — smoke 429 demo is simulated:** a live 429 can't be forced deterministically, so `scripts/smoke.py` exercises the real `call_with_backoff` against a scripted twice-429 op with no-op sleeps; the live retry path is covered by injection-seam tests. Live leg still requires the human smoke run (§15).
+- **T04 — `ChatResult.model` echoes the requested model** (not `response.model_version`) so the fingerprint stays consistent when the API appends a version suffix.
+- **T04 — unknown price entries raise `ProviderError`:** A3 covers wrong figures, not absent ones — a missing entry must fail loudly. ⚠ `gemini-3.1-flash-lite` (OQ1 fallback) has **no price entry yet**; add its figure to `prices.json` when OQ1 resolves, or `estimate_cost` will raise if it is ever used.
+- **T04 — frozen seams:** `tests/fakes.py` API (`FakeChat`, `FakeEmbeddings`, helpers) is the mock foundation for T09–T14; Ollama model pins `qwen2.5:7b-instruct` / `nomic-embed-text` are constants in `providers/ollama.py` (§7.2).
+- **T04 — OQ1 still open:** free-tier RPD for `gemini-3.5-flash-lite` must be verified live (AI Studio) at the smoke run and logged in §18.
+- **T04 — live smoke result (2026-11-16):** Gemini leg PASSED live — chat OK on `gemini-3.5-flash-lite` (26/18 tokens), embed OK 768-dim norm 1.000000, cost estimated from `prices.json`, 429 backoff demo logged. Ollama leg deferred: Ollama not installed; re-run `uv run python scripts/smoke.py` after `ollama pull qwen2.5:7b-instruct` + `nomic-embed-text`. User decision recorded 2026-11-16.
+- **T04 — bug found by the live smoke:** google-genai's `Models` holds only a weak reference to its `Client`; dropping the Client fails every request ("client has been closed"). Fixed in `89e5423`: `GeminiSession` owns the `genai.Client`, factories and smoke pass it to the backends (`keepalive` slot). This would have broken the production ask path at T11/T12 — worth remembering when reading T04's diff.
