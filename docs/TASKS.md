@@ -17,7 +17,10 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 ## Doing
 
-_(none — next up: **T03**, pending review; T04 is parallelizable with it per §14.3)_
+| ID | Branch | Status |
+|---|---|---|
+| T03 | `arch/caliper/t03` | Implemented + verified (commit `2409b2a`); awaiting review before PR |
+| T04 | `arch/caliper/t04` (in worktree) | In progress (parallel, disjoint files per §14.3); live smoke test pending user (no `GEMINI_API_KEY` / Ollama down) |
 
 ## Remaining
 
@@ -91,3 +94,9 @@ _(none — next up: **T03**, pending review; T04 is parallelizable with it per �
 - **T02 — merge order (§11.2 ambiguity):** the version preset is loaded first and the user config is deep-merged *over* it (user wins on conflicts). Rationale: this is the only reading consistent with A2's fallback path ("flip `CALIPER_PROVIDER=ollama`" requires overriding `answer.model`/`embeddings.model`, which preset-wins would forbid since presets are committed). FR-10 comparability is not weakened: identity is enforced by the fingerprint gate (§7.8), computed from the resolved config, not by the merge order.
 - **T02 — `answer.prompt_template_sha256`:** presets carry the SHA-256 of the empty string as a placeholder until T11 stores the frozen prompt template file; T11 must replace it in all four TOML files (and in `PROMPT_TEMPLATE_SHA256_PLACEHOLDER` in `config.py`'s default) — the change is fingerprint-visible by construction.
 - **T02 — `high_confidence_threshold`:** not pinned in §9.7; initialized to 0.60 in all presets. To be re-verified alongside the refusal threshold at T16 before the V1 baseline run freezes it.
+- **T03 — FTS5 flavor (§8.3 wording ambiguity):** §8.3's "contentless external-content rowid-mapped to `chunk_id`" mixes two FTS5 flavors. Implemented as an **external-content** FTS5 table (`content='chunks_<fp8>'`, `content_rowid='chunk_id'`) — it stores no text itself (contentless in effect) but can serve `snippet()` from the content table, and AFTER INSERT/DELETE triggers keep it in sync with orphan removal (FR-02/T07). Smallest choice consistent with §7.4's "rowid-mapped" requirement; recorded here rather than re-derived later.
+- **T03 — `runs` lifecycle enforcement:** beyond §8.9's literal triggers, `ensure_schema` also installs `runs_insert_must_start_running` (INSERTs must use status `running`) so the §8.7 lifecycle ("running → terminal is the only permitted UPDATE") cannot be bypassed from row zero. `finish_run()` performs the single legal UPDATE (status + finished_at + summary_json in one statement while `OLD.status = 'running'`).
+- **T03 — `ingest_runs` upsert semantics:** "idempotent upsert" (§8.3) implemented as one row per fingerprint (UNIQUE) with `ON CONFLICT DO UPDATE` that resets `finished_at`/`pages_*` until the new run finishes; matches §8.1's "latest per fingerprint".
+- **T03 — chunk/embedding accessors added for T07/T08:** `insert_chunks` (returns ids, row-by-row since ids are reported), `get_chunks` (order-preserving, raises on missing id), `delete_chunks` (also deletes the vec rows; FTS follows via trigger), `insert_chunk_embeddings` (serializes via `sqlite_vec.serialize_float32`; validates 768 dims). No business logic added (§7.3).
+- **T03 — `db` is a leaf (§7.3):** it imports nothing from `config`; callers pass fingerprints/`fp8` suffixes as strings. Suffix is validated as 8 lowercase hex chars before any SQL interpolation.
+- **T03 — sqlite-vec binding detail:** embeddings must be bound as serialized float32 (the package's `serialize_float32`), not Python lists; `connect()` enables extension loading around `sqlite_vec.load()`.
