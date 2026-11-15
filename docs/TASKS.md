@@ -12,11 +12,12 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 | ID | Commit(s) | Verified |
 |---|---|---|
-| T01 | `c76a2bc` (tracker), `d0446f6` (scaffold) | `uv sync` OK (CPython 3.12.16); `uv run caliper --help` renders; `ruff check` + `ruff format --check` + `mypy` clean; 2 tests pass. *CI run on GitHub pending — first push.* |
+| T01 | `c76a2bc` (tracker), `d0446f6` (scaffold) | `uv sync` OK (CPython 3.12.16); `uv run caliper --help` renders; `ruff check` + `ruff format --check` + `mypy` clean; 2 tests pass. CI green on push/PR and on `main` after PR #1 merge (run 43717112766). |
+| T02 | `489c035` | `uv run pytest` — 38 passed (36 new config tests); `ruff check` + `ruff format --check` clean; `mypy` strict clean. Verified: user-over-preset deep merge; §9.7 contents binding for v1/v2/v3 + shared fixed answerer; fingerprint stable across reloads, differs across versions, and reacts to every binding-field change (parametrized, 17 fields); invalid configs rejected with key path. |
 
 ## Doing
 
-_(none — next up: **T02**, pending review)_
+_(none — next up: **T03**, pending review; T04 is parallelizable with it per §14.3)_
 
 ## Remaining
 
@@ -84,3 +85,9 @@ _(none — next up: **T02**, pending review)_
 - Max concurrency: 2 agents; ownership rules in ARCHITECTURE §6.3 keep parallel tasks disjoint.
 - Contract-touching tasks follow the shared-file protocol (§14.4): PR touches only the owned file + its tests, updates the binding §7–§9 section in the same change, and names dependent tasks.
 - Never edit `data/golden/questions.jsonl` after the first measured run; never commit `data/caliper.db`, `data/cache/`, `caliper.toml`, `.env`.
+
+### Decisions recorded during the build
+
+- **T02 — merge order (§11.2 ambiguity):** the version preset is loaded first and the user config is deep-merged *over* it (user wins on conflicts). Rationale: this is the only reading consistent with A2's fallback path ("flip `CALIPER_PROVIDER=ollama`" requires overriding `answer.model`/`embeddings.model`, which preset-wins would forbid since presets are committed). FR-10 comparability is not weakened: identity is enforced by the fingerprint gate (§7.8), computed from the resolved config, not by the merge order.
+- **T02 — `answer.prompt_template_sha256`:** presets carry the SHA-256 of the empty string as a placeholder until T11 stores the frozen prompt template file; T11 must replace it in all four TOML files (and in `PROMPT_TEMPLATE_SHA256_PLACEHOLDER` in `config.py`'s default) — the change is fingerprint-visible by construction.
+- **T02 — `high_confidence_threshold`:** not pinned in §9.7; initialized to 0.60 in all presets. To be re-verified alongside the refusal threshold at T16 before the V1 baseline run freezes it.
