@@ -1,0 +1,51 @@
+[project]
+name = "caliper"
+version = "0.1.0"
+description = "Local question-answering assistant over one frozen documentation set, with measured quality."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-genai~=1.0",
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "numpy>=1.26",
+    "httpx>=0.27",
+    "sqlite-vec==0.1.9",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+rerank = ["sentence-transformers>=3.0"]
+
+[project.scripts]
+caliper = "caliper.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff",
+    "mypy>=1.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/caliper"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.mypy]
+strict = true
+files = ["src/caliper"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
