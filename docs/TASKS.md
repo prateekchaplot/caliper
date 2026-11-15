@@ -20,7 +20,7 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 | ID | Branch | Status |
 |---|---|---|
 | T03 | `arch/caliper/t03` | Implemented + verified (commit `2409b2a`); awaiting review before PR |
-| T04 | `arch/caliper/t04` (worktree) | Implemented + verified (commit `e6b5517`); awaiting review before PR; **live smoke pending user** (no `GEMINI_API_KEY`, Ollama not running) |
+| T04 | `arch/caliper/t04` (worktree) | Implemented + verified (`e6b5517`, `89e5423`); PR raised; **Ollama smoke leg deferred** (user decision 2026-11-16): Gemini leg passed live, Ollama leg re-run when Ollama is installed |
 
 ## Remaining
 
@@ -105,4 +105,7 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 - **T04 — smoke 429 demo is simulated:** a live 429 can't be forced deterministically, so `scripts/smoke.py` exercises the real `call_with_backoff` against a scripted twice-429 op with no-op sleeps; the live retry path is covered by injection-seam tests. Live leg still requires the human smoke run (§15).
 - **T04 — `ChatResult.model` echoes the requested model** (not `response.model_version`) so the fingerprint stays consistent when the API appends a version suffix.
 - **T04 — unknown price entries raise `ProviderError`:** A3 covers wrong figures, not absent ones — a missing entry must fail loudly. ⚠ `gemini-3.1-flash-lite` (OQ1 fallback) has **no price entry yet**; add its figure to `prices.json` when OQ1 resolves, or `estimate_cost` will raise if it is ever used.
-- **T04 — frozen seams:** `tests/fakes.py` API (`FakeChat`, `FakeEmbeddings`, helpers) is the mock foundation for T09–T14; Ollama model pins `qwen2.5:7b-instruct` / `nomic-embed-text` are constants in `providers/ollama.py` (§7.2). **OQ1 still open:** free-tier RPD for `gemini-3.5-flash-lite` must be verified live (AI Studio) at the smoke run and logged in §18.
+- **T04 — frozen seams:** `tests/fakes.py` API (`FakeChat`, `FakeEmbeddings`, helpers) is the mock foundation for T09–T14; Ollama model pins `qwen2.5:7b-instruct` / `nomic-embed-text` are constants in `providers/ollama.py` (§7.2).
+- **T04 — OQ1 still open:** free-tier RPD for `gemini-3.5-flash-lite` must be verified live (AI Studio) at the smoke run and logged in §18.
+- **T04 — live smoke result (2026-11-16):** Gemini leg PASSED live — chat OK on `gemini-3.5-flash-lite` (26/18 tokens), embed OK 768-dim norm 1.000000, cost estimated from `prices.json`, 429 backoff demo logged. Ollama leg deferred: Ollama not installed; re-run `uv run python scripts/smoke.py` after `ollama pull qwen2.5:7b-instruct` + `nomic-embed-text`. User decision recorded 2026-11-16.
+- **T04 — bug found by the live smoke:** google-genai's `Models` holds only a weak reference to its `Client`; dropping the Client fails every request ("client has been closed"). Fixed in `89e5423`: `GeminiSession` owns the `genai.Client`, factories and smoke pass it to the backends (`keepalive` slot). This would have broken the production ask path at T11/T12 — worth remembering when reading T04's diff.
