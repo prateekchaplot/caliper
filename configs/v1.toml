@@ -1,0 +1,27 @@
+# V1 baseline preset — cosine-only retrieval over heading chunks (§9.7).
+# All three presets share identical answer settings (FR-10 invariant).
+
+[answer]
+model = "gemini-3.5-flash-lite"
+temperature = 0.0
+seed = 42
+refusal_threshold = 0.35 # initial; re-verified once against V1 data, then frozen
+high_confidence_threshold = 0.60
+prompt_template_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" # placeholder until T11
+
+[embeddings]
+model = "gemini-embedding-001"
+dimensions = 768
+
+[chunking]
+unit = "heading"
+size_tokens = 800
+overlap_tokens = 0
+
+[retrieval]
+mode = "vector"
+vector_top_k = 5
+fts_top_k = 0
+rrf_k = 60
+rerank = "none"
+final_k = 5

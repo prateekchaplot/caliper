@@ -1,0 +1,27 @@
+# V2 preset — improved segmentation: fixed-size windows with overlap (§9.7).
+# Only the chunking block differs from V1; retrieval and answerer unchanged.
+
+[answer]
+model = "gemini-3.5-flash-lite"
+temperature = 0.0
+seed = 42
+refusal_threshold = 0.35 # initial; re-verified once against V1 data, then frozen
+high_confidence_threshold = 0.60
+prompt_template_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" # placeholder until T11
+
+[embeddings]
+model = "gemini-embedding-001"
+dimensions = 768
+
+[chunking]
+unit = "fixed"
+size_tokens = 350
+overlap_tokens = 50
+
+[retrieval]
+mode = "vector"
+vector_top_k = 5
+fts_top_k = 0
+rrf_k = 60
+rerank = "none"
+final_k = 5
