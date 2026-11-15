@@ -1,0 +1,21 @@
+# Local runtime data (ARCHITECTURE §6.3 — never committed)
+data/caliper.db
+data/*.db
+data/backup.db
+data/cache/
+data/feedback_export.csv
+
+# User config and secrets
+caliper.toml
+.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
