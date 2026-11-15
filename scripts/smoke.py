@@ -43,7 +43,7 @@ from caliper.providers.base import (
     load_prices,
     ollama_base_url,
 )
-from caliper.providers.gemini import GeminiChat, GeminiEmbeddings
+from caliper.providers.gemini import GeminiChat, GeminiEmbeddings, GeminiSession
 from caliper.providers.ollama import (
     OLLAMA_CHAT_MODEL,
     OLLAMA_EMBED_MODEL,
@@ -98,14 +98,15 @@ def _load_env_file(path: Path) -> None:
 def _build_backend(name: str, cfg: CaliperConfig) -> BackendPair:
     """Build one backend pair directly (smoke tests BOTH, ignoring CALIPER_PROVIDER)."""
     if name == "gemini":
-        from google import genai
-
-        models = genai.Client(api_key=gemini_api_key()).models
+        session = GeminiSession(gemini_api_key())
         return BackendPair(
             name,
-            GeminiChat(models),
+            GeminiChat(session.models, keepalive=session),
             GeminiEmbeddings(
-                models, model=cfg.embeddings.model, dimensions=cfg.embeddings.dimensions
+                session.models,
+                model=cfg.embeddings.model,
+                dimensions=cfg.embeddings.dimensions,
+                keepalive=session,
             ),
             chat_model=cfg.answer.model,
         )

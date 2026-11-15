@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Protocol
 
+from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 from google.genai.types import EmbedContentConfig, GenerateContentConfig
@@ -56,14 +57,36 @@ def _is_rate_limited(exc: Exception) -> bool:
     return isinstance(exc, genai_errors.APIError) and exc.code == 429
 
 
+class GeminiSession:
+    """Owns a `genai.Client` so its `.models` handle stays usable (§7.2).
+
+    The google-genai SDK's `Models` object holds only a weak reference to its
+    `Client`: once the `Client` is garbage-collected, every request fails with
+    "Cannot send a request, as the client has been closed". Factories and the
+    smoke script therefore build a `GeminiSession` and hand it to the backends,
+    which store it — keeping the client alive for the backend's lifetime.
+    """
+
+    def __init__(self, api_key: str) -> None:
+        self.client = genai.Client(api_key=api_key)
+        self.models = self.client.models
+
+
 class GeminiChat:
     """ChatBackend over the Gemini API (§7.2). Model is passed per call."""
 
     def __init__(
-        self, models: GeminiModels, *, sleep: Callable[[float], None] = time.sleep
+        self,
+        models: GeminiModels,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        keepalive: object | None = None,
     ) -> None:
         self._models = models
         self._sleep = sleep
+        # Holds the GeminiSession (and thus the genai.Client) referenced for
+        # this backend's lifetime; see GeminiSession's docstring.
+        self._keepalive = keepalive
 
     def complete(
         self, *, system: str, user: str, model: str, temperature: float, seed: int | None
@@ -99,11 +122,15 @@ class GeminiEmbeddings:
         model: str,
         dimensions: int = EMBEDDING_DIMENSIONS,
         sleep: Callable[[float], None] = time.sleep,
+        keepalive: object | None = None,
     ) -> None:
         self._models = models
         self._model = model
         self._dimensions = dimensions
         self._sleep = sleep
+        # Holds the GeminiSession (and thus the genai.Client) referenced for
+        # this backend's lifetime; see GeminiSession's docstring.
+        self._keepalive = keepalive
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []

@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import httpx
-from google import genai
 
 from caliper.config import ConfigError
 from caliper.providers.base import (
@@ -31,7 +30,7 @@ from caliper.providers.base import (
     ollama_base_url,
     provider_name,
 )
-from caliper.providers.gemini import GeminiChat, GeminiEmbeddings
+from caliper.providers.gemini import GeminiChat, GeminiEmbeddings, GeminiSession
 from caliper.providers.ollama import (
     OLLAMA_CHAT_MODEL,
     OLLAMA_EMBED_MODEL,
@@ -53,6 +52,7 @@ __all__ = [
     "EmbeddingBackend",
     "GeminiChat",
     "GeminiEmbeddings",
+    "GeminiSession",
     "OllamaChat",
     "OllamaEmbeddings",
     "PriceEntry",
@@ -74,8 +74,8 @@ def get_chat(cfg: CaliperConfig) -> ChatBackend:
     `complete()` on every call; this factory only selects the transport.
     """
     if provider_name() == "gemini":
-        genai_client = genai.Client(api_key=gemini_api_key())
-        return GeminiChat(genai_client.models)
+        session = GeminiSession(gemini_api_key())
+        return GeminiChat(session.models, keepalive=session)
     ollama_client = httpx.Client(
         base_url=ollama_base_url(), timeout=httpx.Timeout(OLLAMA_HTTP_TIMEOUT_S)
     )
@@ -96,9 +96,12 @@ def get_embeddings(cfg: CaliperConfig) -> EmbeddingBackend:
             f"(ADR-003: vec0 schema + Ollama compatibility), got {cfg.embeddings.dimensions}"
         )
     if provider_name() == "gemini":
-        genai_client = genai.Client(api_key=gemini_api_key())
+        session = GeminiSession(gemini_api_key())
         return GeminiEmbeddings(
-            genai_client.models, model=cfg.embeddings.model, dimensions=cfg.embeddings.dimensions
+            session.models,
+            model=cfg.embeddings.model,
+            dimensions=cfg.embeddings.dimensions,
+            keepalive=session,
         )
     ollama_client = httpx.Client(
         base_url=ollama_base_url(), timeout=httpx.Timeout(OLLAMA_HTTP_TIMEOUT_S)
