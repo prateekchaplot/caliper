@@ -201,10 +201,12 @@ def test_retrieve_rejects_empty_question(
 
 
 def test_retrieve_rejects_unimplemented_mode(conn: sqlite3.Connection, tmp_path: Path) -> None:
-    cfg = _load_cfg(
-        tmp_path,
-        '[retrieval]\nmode = "hybrid_rrf"\nvector_top_k = 20\nfts_top_k = 20\n',
-    )
+    # hybrid_rrf is wired since T10; a mode outside the §7.5 pair still raises.
+    # RetrievalConfig's Literal rejects bogus modes at load time (§11.4), so
+    # this injects one past validation with pydantic's bypassing model_copy.
+    cfg = _load_cfg(tmp_path)
+    bogus = cfg.retrieval.model_copy(update={"mode": "semantic"})
+    cfg = cfg.model_copy(update={"retrieval": bogus})
 
     with pytest.raises(RetrievalError, match="not implemented"):
         retrieve(QUESTION, conn, cfg, embeddings=FakeEmbeddings())

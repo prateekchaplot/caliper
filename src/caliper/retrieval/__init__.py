@@ -1,18 +1,24 @@
 """Retrieval core (§7.5, §9.3): question → final bounded passage set.
 
-T09 implements `mode = "vector"`: cosine KNN top-`cfg.retrieval.final_k` over
-the per-fingerprint `chunks_<fp8>_vec` table, using the stable brute-force
+`mode = "vector"` (T09): cosine KNN top-`cfg.retrieval.final_k` over the
+per-fingerprint `chunks_<fp8>_vec` table, using the stable brute-force
 sqlite-vec path (`WHERE embedding MATCH ? AND k = ?`) — no ANN indexes
-(§7.5). `mode = "hybrid_rrf"` (vector + FTS5 fusion in T10's `fuse.py`) and
-cross-encoder reranking (T18) are not wired here and raise until they are.
+(§7.5). `mode = "hybrid_rrf"` (T10): the same brute-force KNN at candidate
+depth `vector_top_k` plus an FTS5 BM25 query at depth `fts_top_k`, fused by
+Reciprocal Rank Fusion (`fuse.rrf`, k = `rrf_k`) and cut to `final_k`;
+`score` is then the fused RRF score (higher = more relevant) and every
+passage carries `stage = "rrf"`. Cross-encoder reranking (T18) is not wired
+here; `retrieval.rerank` is passed through untouched.
 
 Contract (§9.3): exactly `final_k` passages sorted by descending relevance —
-ascending cosine distance, so LOWER `score` means MORE similar (the schema's
-`distance_metric=cosine` yields ≈0 for identical vectors, per T03's tests) —
-`rank` 1-based with 1 = best, and `stage = "vector"` on every passage. If the
-index holds fewer rows than `final_k`, fewer passages come back and the
-caller refuses (§9.3, §11.5); an empty or never-ingested index returns [].
-No sentinel scores are ever fabricated.
+in vector mode ascending cosine distance, so LOWER `score` means MORE
+similar (the schema's `distance_metric=cosine` yields ≈0 for identical
+vectors, per T03's tests); in hybrid_rrf mode descending RRF score, so
+HIGHER `score` means MORE relevant — `rank` 1-based with 1 = best, and the
+per-mode `stage` tag on every passage. If the index holds fewer rows than
+`final_k`, fewer passages come back and the caller refuses (§9.3, §11.5);
+an empty or never-ingested index returns []. No sentinel scores are ever
+fabricated.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from caliper.config import CaliperConfig, fp8
 from caliper.db import get_chunks
 from caliper.providers import EmbeddingBackend, get_embeddings
 from caliper.providers.base import EMBEDDING_DIMENSIONS
+from caliper.retrieval.fuse import rrf
 
 
 class RetrievalError(Exception):
@@ -108,6 +115,135 @@ def _knn(
     return [(int(row[0]), float(row[1])) for row in rows]
 
 
+def _fts_table_exists(conn: sqlite3.Connection, suffix: str) -> bool:
+    """True when the per-fingerprint FTS5 table exists (created at ingest, §8.3)."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (f"chunks_{suffix}_fts",),
+    ).fetchone()
+    return row is not None
+
+
+def _fts_escape(question: str) -> str | None:
+    """Escape a raw question into a safe FTS5 MATCH query string (§7.5).
+
+    Each whitespace-separated term is wrapped in double quotes (FTS5 quoted
+    strings, so punctuation cannot form query syntax) and embedded double
+    quotes are stripped, so user input can never break the MATCH or inject
+    operators. A term kept only if it still contains a word character — a
+    purely punctuation term would tokenize to an empty phrase. Returns None
+    when no queryable term survives, which the caller treats as "no keyword
+    candidates" (graceful), never as an error.
+    """
+    terms = [
+        f'"{stripped}"'
+        for term in question.split()
+        if (stripped := term.replace('"', "")) and any(ch.isalnum() for ch in stripped)
+    ]
+    return " ".join(terms) if terms else None
+
+
+def _bm25(conn: sqlite3.Connection, suffix: str, question: str, k: int) -> list[int]:
+    """Best-first chunk ids from the FTS5 BM25 keyword query (§7.5).
+
+    External-content FTS5 (content='chunks_<fp8>', content_rowid='chunk_id',
+    trigger-synced, T03), so bm25() reads the live bodies and the FTS rowid
+    IS the chunk id — selected as `rowid AS chunk_id` (the FTS table has no
+    chunk_id column of its own). `bm25()` returns negative values where
+    MORE negative = MORE relevant, so ascending score is best-first; the
+    `chunk_id` tie-break mirrors the vector mode's deterministic rule — both
+    ties (identical bm25, e.g. duplicate bodies) and FTS's internal order
+    must not leak nondeterminism into the fused ranking. Fewer rows than
+    `k` (or zero rows) simply return fewer hits — graceful (§9.3). sqlite
+    errors surface as RetrievalError with the message attached.
+    """
+    _check_suffix(suffix)
+    query = _fts_escape(question)
+    if query is None:
+        return []
+    try:
+        rows = conn.execute(
+            f"SELECT rowid AS chunk_id, bm25(chunks_{suffix}_fts) AS score"
+            f" FROM chunks_{suffix}_fts"
+            f" WHERE chunks_{suffix}_fts MATCH ? ORDER BY score, chunk_id LIMIT ?",
+            (query, k),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise RetrievalError(f"FTS query failed on chunks_{suffix}_fts: {exc}") from exc
+    return [int(row[0]) for row in rows]
+
+
+def _retrieve_hybrid_rrf(
+    question: str,
+    conn: sqlite3.Connection,
+    cfg: CaliperConfig,
+    embeddings: EmbeddingBackend | None,
+) -> list[Passage]:
+    """hybrid_rrf mode (§7.5 binding): vector + FTS5 candidates fused by RRF.
+
+    Vector KNN at candidate depth `vector_top_k` (20 in §9.7) + FTS5 BM25 at
+    depth `fts_top_k` (20), fused by `fuse.rrf` with k = `rrf_k` (60), then
+    cut to `final_k` (5). Each returned passage's `score` is its fused RRF
+    score — HIGHER = MORE relevant, the opposite polarity of vector mode's
+    cosine distance — and `stage = "rrf"`; `rerank` is T18's stage on top of
+    this list and is deliberately untouched here.
+
+    A missing candidate source degrades gracefully (§9.3): a never-ingested
+    fingerprint (neither table) returns [], a missing vec0 or FTS5 table
+    contributes an empty list so the fused result is the other list alone
+    re-scored by RRF, and a MATCH with zero keyword hits does the same. An
+    empty fusion returns []. No new hard failures are introduced beyond the
+    config guard below and the shared question/embedding checks.
+    """
+    # Config guard (§11.4): a v1/v2-shaped config turned to hybrid_rrf without
+    # the fusion knobs is a config error, raised as a RetrievalError like the
+    # other hard failures here (RetrievalConfig's model validator already
+    # rejects this at load time; this is defense in depth for bypassed models).
+    if cfg.retrieval.fts_top_k < 1 or cfg.retrieval.rrf_k < 1:
+        raise RetrievalError(
+            "hybrid_rrf requires retrieval.fts_top_k > 0 and retrieval.rrf_k >= 1"
+            " (a v1/v2 preset lacks the fusion knobs; §11.4)"
+        )
+    backend = embeddings if embeddings is not None else get_embeddings(cfg)
+    query_vector = backend.embed_query(question)
+    if len(query_vector) != EMBEDDING_DIMENSIONS:
+        raise RetrievalError(
+            f"query embedding has dimension {len(query_vector)}, expected {EMBEDDING_DIMENSIONS}"
+        )
+    suffix = fp8(cfg)
+    has_vec = _vec_table_exists(conn, suffix)
+    has_fts = _fts_table_exists(conn, suffix)
+    if not has_vec and not has_fts:
+        # Never-ingested fingerprint ≡ empty index (§11.5): graceful [] — the
+        # caller refuses; distinguishing §9's `index_missing` from a plain
+        # refusal is the caller's edge decision. No sentinel passages.
+        return []
+    vector_ids: list[int] = []
+    if has_vec:
+        # Same deterministic order as vector mode: ascending distance (= more
+        # similar first), ascending chunk_id on ties.
+        hits = _knn(conn, suffix, query_vector, cfg.retrieval.vector_top_k)
+        hits.sort(key=lambda hit: (hit[1], hit[0]))
+        vector_ids = [chunk_id for chunk_id, _ in hits]
+    fts_ids = _bm25(conn, suffix, question, cfg.retrieval.fts_top_k) if has_fts else []
+    fused = rrf(vector_ids, fts_ids, k=cfg.retrieval.rrf_k)[: cfg.retrieval.final_k]
+    if not fused:
+        return []
+    chunks = get_chunks(conn, suffix, [chunk_id for chunk_id, _ in fused])
+    return [
+        Passage(
+            chunk_id=chunk.chunk_id,
+            page_url=chunk.page_url,
+            heading_path=chunk.heading_path,
+            body=chunk.body,
+            score=score,
+            rank=rank,
+            stage="rrf",
+        )
+        for rank, (chunk, (_, score)) in enumerate(zip(chunks, fused, strict=True), start=1)
+    ]
+
+
 def retrieve(
     question: str,
     conn: sqlite3.Connection,
@@ -125,25 +261,32 @@ def retrieve(
     more similar), `stage = "vector"`; deterministic on fixed input (ties are
     broken by ascending chunk_id).
 
+    hybrid_rrf mode (T10, §7.5): the same embedding seam, then vector KNN top
+    `cfg.retrieval.vector_top_k` + FTS5 BM25 top `cfg.retrieval.fts_top_k`
+    fused by `fuse.rrf` (k = `cfg.retrieval.rrf_k`) and cut to `final_k`.
+    `score` = the fused RRF score (higher is more relevant), `stage = "rrf"`;
+    keyword candidates are RRF-scored even when the FTS side is empty.
+
     The embedding backend is built with the provider factory
     (`get_embeddings`, which owns session setup per T04's `keepalive`
     pattern). Tests inject a backend through the keyword-only `embeddings`
     seam — the suite's fakes, §15 — so the positional §9.3 contract
     `retrieve(question, conn, cfg)` is unchanged.
 
-    Failure modes (§16): empty question, unimplemented mode, or a
-    non-768-dim query embedding raise RetrievalError. An index with fewer
-    rows than `final_k`, an empty index, or a missing (never-ingested) index
-    return fewer passages or [] — the caller refuses per §9.3/§11.5; no
-    sentinel `score` value is introduced.
+    Failure modes (§16): empty question, unimplemented mode, a hybrid_rrf
+    config missing the fusion knobs (§11.4 config guard), or a non-768-dim
+    query embedding raise RetrievalError. An index with fewer rows than
+    `final_k`, an empty index, or a missing (never-ingested) index return
+    fewer passages or [] — the caller refuses per §9.3/§11.5; no sentinel
+    `score` value is introduced.
     """
     if not question.strip():
         raise RetrievalError("question must be a non-empty string")
     mode = cfg.retrieval.mode
+    if mode == "hybrid_rrf":
+        return _retrieve_hybrid_rrf(question, conn, cfg, embeddings)
     if mode != "vector":
-        raise RetrievalError(
-            f"retrieval mode {mode!r} is not implemented here (hybrid_rrf is T10, rerank is T18)"
-        )
+        raise RetrievalError(f"retrieval mode {mode!r} is not implemented here (rerank is T18)")
     backend = embeddings if embeddings is not None else get_embeddings(cfg)
     query_vector = backend.embed_query(question)
     if len(query_vector) != EMBEDDING_DIMENSIONS:
