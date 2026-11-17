@@ -20,14 +20,11 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 | T09 | `arch/caliper/t09` → PR #7, squash merge `b8c1155` (code commit `1f2beb0`) | `uv run pytest` — 134 passed standalone (12 new retrieval tests: determinism, exactly-`final_k`, oracle cosine ordering, fewer-rows/empty/missing index, typed errors); 166 on the combined T05+T09 stack; `ruff check` + `ruff format --check` + `mypy` strict clean; CI green on PR (run 43921677210). |
 | T06 | `arch/caliper/t06` → PR #11, squash merge `636a4b4` (code commit `c061e02`) | `uv run pytest` — 202 passed standalone (166 prior + 36 new parse/chunker tests); 223 on the combined T06+T10 stack on `main`; `ruff check` + `ruff format --check` + `mypy` strict clean. |
 | T10 | `arch/caliper/t10` → PR #10, squash merge `2af211e` (code commit `7a11c4f`) | `uv run pytest` — 187 passed standalone (166 baseline + 21 new: 9 RRF unit tests incl. hand-computed fused scores, 12 hybrid-mode integration tests on a fixture DB with sqlite-vec); 223 combined; `ruff check` + `ruff format --check` + `mypy` strict clean; end-to-end on the real v3 preset matched hand-computed fused scores (2/61, 2/62, 1/63). |
+| T07 | `arch/caliper/t07` → PR #12, squash merge `4b4b5c9` (code commit `9d726ad`) | `uv run pytest` — 240 passed (223 prior + 17 new: chunk-hash/§9.4-shape unit tests; mini-corpus integration covering double-ingest identity, orphan removal with FTS/vec sync, ≤100 batch bound, tarball-layout failure, CLI JSON stdout + config-error envelope exit 2); `ruff check` + `ruff format --check` + `mypy` strict clean; 240 re-run green on `main` post-merge. §7.4 updated in the same PR: CHARS_PER_TOKEN=4 estimator named (T06 deviation paid off) + hash normalization for T08. |
 
 ## Doing
 
-| ID | Branch | PR | Verification |
-|---|---|---|---|
-| T07 | `arch/caliper/t07` | #12 | `uv run pytest` — 240 passed (223 prior + 17 new: chunk-hash/§9.4-shape unit tests; mini-corpus integration covering double-ingest identity, orphan removal with FTS/vec sync, ≤100 batch bound, tarball-layout failure, and `caliper ingest` JSON stdout + config-error envelope exit 2); `ruff check` + `ruff format --check` + `mypy` strict clean; `caliper ingest --help` renders. |
-
-_(PR #12 open — T07 moves to Done only at merge. Next up after T07: **T08** (needs T07 ✅ on merge), **T11** (needs T09 ✅), **T13** (needs T03 ✅))_
+_(none — next up: **T08** (needs T07 ✅), **T11** (needs T09 ✅), **T13** (needs T03 ✅))_
 
 ## Remaining
 
