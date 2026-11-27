@@ -24,11 +24,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-# SHA-256 of the empty string: placeholder for the frozen prompt template's
-# hash until T11 stores the real template file. Changing this value changes
-# the fingerprint, so T11's replacement is fingerprint-visible by construction.
+# SHA-256 of the frozen prompt template (src/caliper/answer/prompt_template.md),
+# stored by T11. Changing this value changes the fingerprint, so the T11
+# replacement is fingerprint-visible by construction.
 PROMPT_TEMPLATE_SHA256_PLACEHOLDER = (
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    "42c34ee58602c6c012d716eb952ed52a2664b8f89023892fca3155db91a9350d"
 )
 
 

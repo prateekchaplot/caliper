@@ -7,7 +7,7 @@ temperature = 0.0
 seed = 42
 refusal_threshold = 0.35 # initial; re-verified once against V1 data, then frozen
 high_confidence_threshold = 0.60
-prompt_template_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" # placeholder until T11
+prompt_template_sha256 = "42c34ee58602c6c012d716eb952ed52a2664b8f89023892fca3155db91a9350d" # frozen by T11; changing it changes the fingerprint (§11.2)
 
 [embeddings]
 model = "gemini-embedding-001"
