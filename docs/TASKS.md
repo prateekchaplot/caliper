@@ -25,7 +25,11 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 ## Doing
 
-_(none — next up: **T11** (needs T09 ✅), **T13** (needs T03 ✅))_
+| ID | Branch | Verified | Notes |
+|---|---|---|---|
+| T11 | `arch/caliper/t11` | In progress (this cycle) | Answer + quotes + confidence; frozen prompt template hash synced to config.py + all four presets; see PR for deviations. |
+
+_(next eligible after T11 merges: T13 (needs T03 ✅))_
 
 ## Remaining
 
@@ -144,4 +148,19 @@ _(none — next up: **T11** (needs T09 ✅), **T13** (needs T03 ✅))_
 
 - **T08 — resume checkpoint in `ingest_runs.summary_json`:** a per-fingerprint checkpoint (version, fingerprint, source_ref, embedded_chunks, total_chunks, last_embedded_chunk_id, updated_at) is stored under a `resume` key inside the `ingest_runs` row; `finished_at IS NULL` marks an in-progress run. Each ≤100 chunk batch is embedded then committed in its own transaction (embed first, then insert + checkpoint + commit), so a crash loses at most the in-flight batch. Resume skips already-embedded chunks (hash diff) and repairs chunks missing their vector row. Checkpoint is honored only when version/fingerprint/source_ref match and counts are sane; corrupt or stale checkpoints are ignored with a warning. On completion the checkpoint is replaced by the §9.4 summary. No `db.py`/`schema.sql`/`ARCHITECTURE.md` edits — T08 stays within `src/caliper/ingest/` per §14.2.
   - Workaround recorded: `db.upsert_ingest_run` returns `lastrowid = 0` on the `ON CONFLICT` update path, so `run_ingest` re-reads the row id via `get_ingest_run` before calling `finish_ingest_run`. (`db.py` is T03-owned; left untouched in T08.)
+
+- **T11 — frozen prompt template:** `src/caliper/answer/prompt_template.md` added (SHA-256 `42c34ee58602c6c012d716eb952ed52a2664b8f89023892fca3155db91a9350d`); `PROMPT_TEMPLATE_SHA256_PLACEHOLDER` in `config.py` and all four presets (`caliper.sample.toml`, `v1/v2/v3.toml`) updated to it — fingerprint-visible by construction; `docs/ARCHITECTURE.md` §7.7 names the file + hash in the same change (§14.4). `answer_question` loads the template and verifies the hash before any provider call; mismatch raises `ConfigError`.
+
+- **T11 — answer semantics (accepted defaults):**
+  - Score polarity: T09's `score` is cosine *distance*; similarity = `1 - distance`. Pre-model refusal when best similarity `< refusal_threshold`; `high` when `≥ high_confidence_threshold`; hybrid_rrf (RRF polarity differs) skips the threshold.
+  - Confidence: `high` = non-refusal, ≥1 verified citation, best similarity ≥ threshold; `medium` = ≥1 verified citation but weaker score or a dropped citation; `low` = all citations unverified, or threshold refusal. Model refusal → `high` (not threshold-driven; §7.7's `low` covers threshold only).
+  - Zero verified citations after the quote retry → `answer_type="answer"` with `confidence="low"` (§7.7: "an answer whose citations all fails keeps answer_type=answer but confidence=low"), not a refusal.
+  - One schema retry + one quote-retry; `payload_json` stores system+user(+reply) for NFR-01.
+  - Embed tokens estimated as `ceil(len(question)/4)` (providers expose no embed usage); cost = chat + embed estimate via `prices.json` (missing model entry fails loudly).
+  - Provider failures propagate; no `requests` row on failure (schema has no failed status) — recorded deviation, application logs latency.
+  - `run_id` persisted unchanged (FR-10 invariant); does not alter behavior.
+
+- **T11 — files owned/created:** `src/caliper/answer/__init__.py`, `answer/quotes.py`, `answer/confidence.py`, `answer/prompt_template.md` (new); `config.py`, `configs/caliper.sample.toml`, `configs/v1/v2/v3.toml`, `docs/ARCHITECTURE.md` §7.7 (contract-required edits). Not touched: `retrieval/*`, `db.py`, `schema.sql`, `providers/*`, `cli.py` (T12's file). Tests: `tests/unit/test_quotes.py`, `test_confidence.py`, `test_answer.py`.
+
+- **T11 — shared-file protocol:** `config.py` is T02-owned and single-owner; this PR touches only it (the hash default) plus its tests, updates §7.7 in the same change, and names dependents T12/T14/T16.
 
