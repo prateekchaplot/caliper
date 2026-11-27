@@ -13,6 +13,7 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 | ID | Commit(s) | Verified |
 |---|---|---|
 | T01 | `c76a2bc` (tracker), `d0446f6` (scaffold) | `uv sync` OK (CPython 3.12.16); `uv run caliper --help` renders; `ruff check` + `ruff format --check` + `mypy` clean; 2 tests pass. CI green on push/PR and on `main` after PR #1 merge (run 43717112766). |
+| T08 | `arch/caliper/t08` → PR #13, squash merge `af8ea87` (code commit `7eea18a`) | `uv run pytest -q` — 245 passed (240 prior + 5 new resume tests); `ruff check` + `ruff format --check` + `mypy` strict clean. Per-batch commit + resume checkpoint verified (crash durability, resume skips finished batches, missing-vector repair, corrupt/complete checkpoint). |
 | T02 | `489c035` | `uv run pytest` — 38 passed (36 new config tests); `ruff check` + `ruff format --check` clean; `mypy` strict clean. Verified: user-over-preset deep merge; §9.7 contents binding for v1/v2/v3 + shared fixed answerer; fingerprint stable across reloads, differs across versions, and reacts to every binding-field change (parametrized, 17 fields); invalid configs rejected with key path. |
 | T03 | `arch/caliper/t03` → PR #4, squash merge `b643290` (code commit `2409b2a`) | `uv run pytest` — 63 passed (25 new: 19 unit accessors/schema/chunk tables incl. FTS sync + cosine; 6 integration trigger enforcement); `ruff check` + `ruff format --check` + `mypy` strict clean; sqlite-vec loads on Windows (`vec_version()`); vec0 cosine ≈ 0 on unit vector. |
 | T04 | `arch/caliper/t04` → PR #5, squash merge `a051f3b` (code commits `e6b5517`, `89e5423`) | `uv run pytest` — 97 passed (30 new providers/fakes tests); `ruff check` + `ruff format --check` + `mypy` strict clean. Live smoke 2026-11-16: **Gemini leg PASSED** (chat on `gemini-3.5-flash-lite`, 768-dim embed norm 1.000000, cost estimated, 429 backoff demo). **Ollama leg deferred** (user decision; Ollama not installed — re-run `scripts/smoke.py` after install). OQ1 (RPD verification in AI Studio) still open. Found+fixed the genai weakref bug (`GeminiSession`). |
@@ -24,9 +25,7 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 ## Doing
 
-| ID | Branch | Commit | Verification |
-|----|--------|--------|--------------|
-| T08 | `arch/caliper/t08` | `7eea18a` | `uv run pytest -q` — 245 passed (240 prior + 5 new resume tests); `ruff check` + `ruff format --check` + `mypy src/caliper` clean. Per-batch commit + resume checkpoint verified (crash durability, resume skips finished batches, missing-vector repair, corrupt/complete checkpoint). |
+_(none — next up: **T11** (needs T09 ✅), **T13** (needs T03 ✅))_
 
 ## Remaining
 
