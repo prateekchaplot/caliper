@@ -38,12 +38,15 @@ from pathlib import Path
 from caliper.config import CaliperConfig, fingerprint, fingerprint_payload
 from caliper.db import (
     ChunkRow,
+    DbError,
     IngestRunRow,
     connect,
     delete_chunks,
     ensure_chunks_tables,
     ensure_schema,
     finish_ingest_run,
+    get_chunks,
+    get_ingest_run,
     insert_chunk_embeddings,
     insert_chunks,
     record_fingerprint,
@@ -69,6 +72,122 @@ _LOGGER = logging.getLogger(__name__)
 #: precedent (recorded in docs/TASKS.md Notes).
 DB_ENV_VAR = "CALIPER_DB"
 DEFAULT_DB_PATH = "data/caliper.db"
+
+
+# --- Resume checkpoint (§10.3; stored inside ingest_runs.summary_json) ----------
+
+#: Top-level key under which a checkpoint lives inside a summary JSON dict.
+RESUME_KEY = "resume"
+#: Bump if the checkpoint shape changes.
+RESUME_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class IngestCheckpoint:
+    """A durable, per-fingerprint resume checkpoint stored in ingest_runs.
+
+    A row with ``finished_at IS NULL`` marks an earlier run that died mid-batch;
+    the checkpoint records exactly how many chunks were committed before the
+    crash so resume never re-embeds finished batches.
+    """
+
+    version: int
+    fingerprint: str
+    source_ref: str
+    embedded_chunks: int
+    total_chunks: int
+    last_embedded_chunk_id: int | None
+    updated_at: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "version": self.version,
+            "fingerprint": self.fingerprint,
+            "source_ref": self.source_ref,
+            "embedded_chunks": self.embedded_chunks,
+            "total_chunks": self.total_chunks,
+            "last_embedded_chunk_id": self.last_embedded_chunk_id,
+            "updated_at": self.updated_at,
+        }
+
+
+def _read_checkpoint(
+    conn: sqlite3.Connection, fingerprint: str, source_ref: str
+) -> IngestCheckpoint | None:
+    """Return a usable checkpoint row, or None if there is none worth resuming.
+
+    Honored only when ``finished_at IS NULL`` (in-progress), the version,
+    fingerprint and source_ref all match, and the counts are sane — so a
+    stale or corrupt checkpoint can never claim work we did not do.
+    """
+    row = get_ingest_run(conn, fingerprint)
+    if row is None or row.finished_at is not None:
+        return None
+    try:
+        blob = json.loads(row.summary_json or "{}")
+        resume = blob.get(RESUME_KEY)
+        if not isinstance(resume, dict):
+            return None
+        if resume.get("version") != RESUME_VERSION:
+            return None
+        if resume.get("fingerprint") != fingerprint:
+            return None
+        if resume.get("source_ref") != source_ref:
+            return None
+        embedded = int(resume.get("embedded_chunks", 0))
+        total = int(resume.get("total_chunks", 0))
+        if total <= 0 or embedded < 0 or embedded > total:
+            return None
+        return IngestCheckpoint(
+            version=int(resume["version"]),
+            fingerprint=str(resume["fingerprint"]),
+            source_ref=str(resume["source_ref"]),
+            embedded_chunks=embedded,
+            total_chunks=total,
+            last_embedded_chunk_id=(
+                int(resume["last_embedded_chunk_id"])
+                if resume.get("last_embedded_chunk_id") is not None
+                else None
+            ),
+            updated_at=str(resume.get("updated_at", "")),
+        )
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _write_checkpoint(
+    conn: sqlite3.Connection,
+    *,
+    fingerprint: str,
+    source_ref: str,
+    full_fingerprint: str,
+    embedded: int,
+    total: int,
+    last_chunk_id: int | None,
+    started_at: str,
+) -> None:
+    """Persist progress inside this batch's transaction (caller commits after)."""
+    row = IngestRunRow(
+        fingerprint=full_fingerprint,
+        source_ref=source_ref,
+        summary_json=json.dumps(
+            {
+                RESUME_KEY: IngestCheckpoint(
+                    version=RESUME_VERSION,
+                    fingerprint=fingerprint,
+                    source_ref=source_ref,
+                    embedded_chunks=embedded,
+                    total_chunks=total,
+                    last_embedded_chunk_id=last_chunk_id,
+                    updated_at=datetime.now(UTC).isoformat(),
+                ).as_dict()
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        started_at=started_at,
+    )
+    upsert_ingest_run(conn, row)
 
 
 # --- §9.4 summary contract -------------------------------------------------------
@@ -245,31 +364,6 @@ def _diff_chunks(
     return inserts, orphans
 
 
-def _store_embeddings(
-    conn: sqlite3.Connection,
-    suffix: str,
-    chunk_ids: Sequence[int],
-    bodies: Sequence[str],
-    backend: EmbeddingBackend,
-) -> int:
-    """Embed the inserted chunks and store their vectors; return the call count.
-
-    Batches of ≤ `EMBED_BATCH_SIZE` (100) texts per request (§7.4, §10.3),
-    vectors L2-normalized by the backend (ADR-003) and keyed by rowid =
-    chunk_id (§8.3). The bounded 429 backoff lives inside the backends
-    (§7.2/T04 — every embed call is wrapped in `call_with_backoff` there), so
-    this loop only counts the batch requests for §9.4's `embed_requests`."""
-    embed_requests = 0
-    for start in range(0, len(chunk_ids), EMBED_BATCH_SIZE):
-        batch_ids = list(chunk_ids[start : start + EMBED_BATCH_SIZE])
-        batch_bodies = list(bodies[start : start + EMBED_BATCH_SIZE])
-        vectors = backend.embed_documents(batch_bodies)
-        embed_requests += 1
-        _LOGGER.debug("embedded batch %d (%d chunks)", embed_requests, len(batch_ids))
-        insert_chunk_embeddings(conn, suffix, list(zip(batch_ids, vectors, strict=True)))
-    return embed_requests
-
-
 def run_ingest(
     cfg: CaliperConfig,
     *,
@@ -318,10 +412,88 @@ def run_ingest(
         )
         inserts, orphans = _diff_chunks(conn, suffix, rows)
         delete_chunks(conn, suffix, orphans)
-        chunk_ids = insert_chunks(conn, suffix, inserts)
-        embed_requests = _store_embeddings(
-            conn, suffix, chunk_ids, [row.body for row in inserts], backend
-        )
+        conn.commit()  # orphan removal durable before the batch loop
+
+        # Resume: an earlier run may have committed chunks and a checkpoint and
+        # then died mid-batch. We never re-embed what is already in the index:
+        # `_diff_chunks` excludes committed chunks from `inserts`, and anything
+        # committed but still missing its vector row gets repaired below.
+        checkpoint = _read_checkpoint(conn, suffix, meta.source_ref)
+        if checkpoint is not None:
+            _LOGGER.info(
+                "resuming ingest %s: %d/%d chunks already embedded",
+                suffix,
+                checkpoint.embedded_chunks,
+                checkpoint.total_chunks,
+            )
+        existing_count_row = conn.execute(f"SELECT COUNT(*) FROM chunks_{suffix}").fetchone()
+        existing_count = int(existing_count_row[0])
+        total_chunks = existing_count + len(inserts)
+
+        # Repair: chunks committed without their vector row (a crash under the
+        # old all-at-once commit). Embed only those, never the rest.
+        missing_ids = [
+            int(row[0])
+            for row in conn.execute(
+                f"""
+                SELECT chunk_id FROM chunks_{suffix}
+                WHERE chunk_id NOT IN (SELECT rowid FROM chunks_{suffix}_vec)
+                """
+            )
+        ]
+        embed_requests = 0
+        embedded = existing_count - len(missing_ids)
+        for start in range(0, len(missing_ids), EMBED_BATCH_SIZE):
+            batch_ids = missing_ids[start : start + EMBED_BATCH_SIZE]
+            repair_rows = get_chunks(conn, suffix, batch_ids)
+            vectors = backend.embed_documents([row.body for row in repair_rows])
+            embed_requests += 1
+            # Chunks already exist in the table; only their vectors are missing.
+            insert_chunk_embeddings(
+                conn,
+                suffix,
+                list(zip(batch_ids, vectors, strict=True)),
+            )
+            embedded += len(repair_rows)
+            _write_checkpoint(
+                conn,
+                fingerprint=suffix,
+                source_ref=meta.source_ref,
+                full_fingerprint=full_fingerprint,
+                embedded=embedded,
+                total=total_chunks,
+                last_chunk_id=batch_ids[-1],
+                started_at=started_wall,
+            )
+            conn.commit()
+
+        # Insert + embed each ≤100 chunk batch, one transaction per batch, so a
+        # crash loses at most the in-flight batch and resume skips finished ones.
+        # Embed before opening any write so network failure never holds a
+        # transaction open; the bounded backoff lives in the backend (§7.2/T04).
+        for start in range(0, len(inserts), EMBED_BATCH_SIZE):
+            insert_batch = inserts[start : start + EMBED_BATCH_SIZE]
+            vectors = backend.embed_documents([row.body for row in insert_batch])
+            chunk_ids = insert_chunks(conn, suffix, insert_batch)
+            insert_chunk_embeddings(
+                conn,
+                suffix,
+                list(zip(chunk_ids, vectors, strict=True)),
+            )
+            embed_requests += 1
+            embedded += len(insert_batch)
+            _write_checkpoint(
+                conn,
+                fingerprint=suffix,
+                source_ref=meta.source_ref,
+                full_fingerprint=full_fingerprint,
+                embedded=embedded,
+                total=total_chunks,
+                last_chunk_id=chunk_ids[-1],
+                started_at=started_wall,
+            )
+            conn.commit()
+
         summary = IngestSummary(
             fingerprint=suffix,
             source_ref=meta.source_ref,
@@ -333,7 +505,7 @@ def run_ingest(
             embed_requests=embed_requests,
             elapsed_s=time.monotonic() - started,
         )
-        ingest_run_id = upsert_ingest_run(
+        upsert_ingest_run(
             conn,
             IngestRunRow(
                 fingerprint=full_fingerprint,
@@ -342,9 +514,18 @@ def run_ingest(
                 started_at=started_wall,
             ),
         )
+        # `upsert_ingest_run`'s lastrowid is unreliable on the ON CONFLICT
+        # update path (returns 0), so re-read the row to get its id before
+        # finishing it. (`db.upsert_ingest_run` is T03-owned; worked around
+        # here rather than crossing the §14.4 ownership boundary in T08.)
+        record = get_ingest_run(conn, full_fingerprint)
+        if record is None:
+            raise DbError(
+                f"ingest_runs row for fingerprint {full_fingerprint} disappeared after upsert"
+            )
         finish_ingest_run(
             conn,
-            ingest_run_id,
+            record.ingest_run_id,
             finished_at=datetime.now(UTC).isoformat(),
             pages_ok=summary.pages_ok,
             pages_skipped=summary.pages_skipped,
