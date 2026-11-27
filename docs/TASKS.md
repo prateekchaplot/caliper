@@ -27,7 +27,7 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 | ID | Branch | Verified | Notes |
 |---|---|---|---|
-| T11 | `arch/caliper/t11` | In progress (this cycle) | Answer + quotes + confidence; frozen prompt template hash synced to config.py + all four presets; see PR for deviations. |
+| T11 | `arch/caliper/t11` → PR #14 | `uv run pytest` — 283 passed (245 prior + 38 new: quotes, confidence, answer unit tests; 12 added after the self-review below); `ruff check` + `ruff format --check` + `mypy --no-incremental src/caliper` strict clean. | Answer + quotes + confidence; frozen prompt template hash synced to config.py + all four presets; see PR for deviations. Self-review fixed 10 defects: prompt label vs `chunk_id` mapping (and the §9.2 `chunk_id` key), dropped citations not recorded `verified=0`, model refusal on the quote retry ignored, `payload_json` losing the correction prompt, answer text taken from the wrong reply, tokens/cost undercounted on retries, embed tokens priced with the chat model, a partial index answered instead of refused, an uncommitted trace, and a template path tied to the working directory. |
 
 _(next eligible after T11 merges: T13 (needs T03 ✅))_
 
@@ -155,10 +155,18 @@ _(next eligible after T11 merges: T13 (needs T03 ✅))_
   - Score polarity: T09's `score` is cosine *distance*; similarity = `1 - distance`. Pre-model refusal when best similarity `< refusal_threshold`; `high` when `≥ high_confidence_threshold`; hybrid_rrf (RRF polarity differs) skips the threshold.
   - Confidence: `high` = non-refusal, ≥1 verified citation, best similarity ≥ threshold; `medium` = ≥1 verified citation but weaker score or a dropped citation; `low` = all citations unverified, or threshold refusal. Model refusal → `high` (not threshold-driven; §7.7's `low` covers threshold only).
   - Zero verified citations after the quote retry → `answer_type="answer"` with `confidence="low"` (§7.7: "an answer whose citations all fails keeps answer_type=answer but confidence=low"), not a refusal.
-  - One schema retry + one quote-retry; `payload_json` stores system+user(+reply) for NFR-01.
-  - Embed tokens estimated as `ceil(len(question)/4)` (providers expose no embed usage); cost = chat + embed estimate via `prices.json` (missing model entry fails loudly).
+  - One schema retry + one quote-retry; `payload_json` stores the effective system+user prompt plus the reply that produced the recorded answer, and an `attempts` trail with every chat call (NFR-01) — a correction prompt is never lost.
+  - Embed tokens estimated as `ceil(len(question)/4)` (providers expose no embed usage); cost = chat tokens priced with `cfg.answer.model` + embed tokens priced with `cfg.embeddings.model` (§11.3's `embed_tokens·embed` term is the embedding model's rate) via `prices.json` (missing model entry fails loudly).
   - Provider failures propagate; no `requests` row on failure (schema has no failed status) — recorded deviation, application logs latency.
   - `run_id` persisted unchanged (FR-10 invariant); does not alter behavior.
+
+- **T11 — citation ids are prompt labels, not chunk_ids (§7.7, §8.5):** the prompt numbers the final set `[1]..[final_k]` and the model cites those numbers; the label is resolved back to the passage's real `chunk_id` for `request_citations` and the §9.2 response (`chunk_id`, not `chunk`). A label outside the final set cannot be stored (its `chunk_id` is unknown) and is dropped with a warning.
+
+- **T11 — refusals before the model:** two deterministic pre-model refusals, both `refusal_stage="threshold"`, `confidence="low"`, no chat call: fewer than `cfg.retrieval.final_k` passages came back (§9.3 — the caller refuses) and best similarity `< refusal_threshold`.
+
+- **T11 — quote-retry outcomes (§7.7):** a correction reply that refuses is a model refusal (`refusal_stage="model"`, no citation rows); a correction reply whose quotes still fail drops those citations and records them in `request_citations` with `verified=0` (the answer keeps only the verified ones); a correction reply that cannot be parsed keeps the first reply's answer and drops its unverified quotes. The answer text always comes from the same reply as the citations.
+
+- **T11 — trace durability:** `answer_question` commits the trace it writes (`db`'s accessors never commit; the component owns the boundary) — a `requests` row that vanished when the caller closed the connection would break FR-07/NFR-01. The frozen template is resolved next to the module (like `db.py`'s `schema.sql`), so it never depends on the process's working directory. Token counts accumulate over every chat call (schema retry + quote retry).
 
 - **T11 — files owned/created:** `src/caliper/answer/__init__.py`, `answer/quotes.py`, `answer/confidence.py`, `answer/prompt_template.md` (new); `config.py`, `configs/caliper.sample.toml`, `configs/v1/v2/v3.toml`, `docs/ARCHITECTURE.md` §7.7 (contract-required edits). Not touched: `retrieval/*`, `db.py`, `schema.sql`, `providers/*`, `cli.py` (T12's file). Tests: `tests/unit/test_quotes.py`, `test_confidence.py`, `test_answer.py`.
 
