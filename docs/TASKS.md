@@ -24,7 +24,9 @@ Statuses: ✅ done · 🔄 doing · ⬜ remaining · ✂️ cut (stretch only, p
 
 ## Doing
 
-_(none — next up: **T08** (needs T07 ✅), **T11** (needs T09 ✅), **T13** (needs T03 ✅))_
+| ID | Branch | Commit | Verification |
+|----|--------|--------|--------------|
+| T08 | `arch/caliper/t08` | `7eea18a` | `uv run pytest -q` — 245 passed (240 prior + 5 new resume tests); `ruff check` + `ruff format --check` + `mypy src/caliper` clean. Per-batch commit + resume checkpoint verified (crash durability, resume skips finished batches, missing-vector repair, corrupt/complete checkpoint). |
 
 ## Remaining
 
@@ -42,7 +44,6 @@ _(none — next up: **T08** (needs T07 ✅), **T11** (needs T09 ✅), **T13** (n
 |---|---|---|---|---|
 | T06 | Parsers + chunkers | `src/caliper/ingest/parse.py`, `src/caliper/ingest/chunkers.py` | T05 | Heading paths correct on fixture corpus; both chunkers hit token bounds; 1,900-token cap enforced |
 | T07 | Ingest orchestration | `src/caliper/ingest/__init__.py`, `src/caliper/cli.py` (ingest) | T03, T06 | Double-ingest on mini-corpus yields identical counts; orphan chunks removed; summary JSON matches §9.4 |
-| T08 | Embedding batcher + resume | edits within `src/caliper/ingest/` only | T07 | Batch ≤100/request; 429 backoff via providers; interrupt + resume completes without re-embedding finished batches |
 
 ### P2 — Ask path
 
@@ -141,3 +142,7 @@ _(none — next up: **T08** (needs T07 ✅), **T11** (needs T09 ✅), **T13** (n
 - **T09 — "score sentinel handling" resolves to §9.3's fewer-returns:** no sentinel `score` value exists. If the index holds fewer rows than `final_k`, the KNN query returns fewer hits and `retrieve` returns that many passages (ranks still 1..n) — the caller refuses (§9.3, §11.5). A missing (never-ingested) or empty vec0 table likewise returns [] gracefully; distinguishing §9's `index_missing` envelope from a plain refusal is the caller's edge decision, not retrieval's.
 - **T09 — public API frozen for T10/T11/T18:** `Passage` (frozen dataclass: `chunk_id`, `page_url`, `heading_path`, `body`, `score`, `rank`, `stage="vector"`), `RetrievalError` (hard failures only: empty question, unimplemented mode, query-embedding dimension ≠ 768 — graceful cases never raise), and `retrieve(question, conn, cfg, *, embeddings=None) -> list[Passage]`: the positional §9.3 signature is unchanged; the keyword-only `embeddings` seam accepts any `EmbeddingBackend` and defaults to the `get_embeddings(cfg)` factory path (T04's session/`keepalive` pattern), which is also how tests inject `FakeEmbeddings` without `patch()` (§15). `score` = cosine distance, **lower = more similar**; ties broken by ascending `chunk_id`; `hybrid_rrf` raises `RetrievalError("not implemented")` until T10 wires `fuse.py`; `vector_top_k` is unused in vector mode (KNN `k = final_k`, §7.5) — it is the hybrid candidate depth for T10. T11 consumes passages sorted by `rank` and must not assume sentinel scores.
 - **T09 — verification (2026-11-16):** `uv run pytest -q` — 134 passed when T09 landed alone (122 prior + 12 new retrieval tests: determinism, exactly-`final_k` shape, closest-ranks-first with oracle cosine distances, fewer-rows, empty/missing index → [], typed errors, query-task-type seam); 166 passed on the combined stack with T05; `ruff check` + `ruff format --check` + `mypy` strict clean. Rebuilt onto `main` (post-#8-squash) as `1f2beb0` before PR #7 merge.
+
+- **T08 — resume checkpoint in `ingest_runs.summary_json`:** a per-fingerprint checkpoint (version, fingerprint, source_ref, embedded_chunks, total_chunks, last_embedded_chunk_id, updated_at) is stored under a `resume` key inside the `ingest_runs` row; `finished_at IS NULL` marks an in-progress run. Each ≤100 chunk batch is embedded then committed in its own transaction (embed first, then insert + checkpoint + commit), so a crash loses at most the in-flight batch. Resume skips already-embedded chunks (hash diff) and repairs chunks missing their vector row. Checkpoint is honored only when version/fingerprint/source_ref match and counts are sane; corrupt or stale checkpoints are ignored with a warning. On completion the checkpoint is replaced by the §9.4 summary. No `db.py`/`schema.sql`/`ARCHITECTURE.md` edits — T08 stays within `src/caliper/ingest/` per §14.2.
+  - Workaround recorded: `db.upsert_ingest_run` returns `lastrowid = 0` on the `ON CONFLICT` update path, so `run_ingest` re-reads the row id via `get_ingest_run` before calling `finish_ingest_run`. (`db.py` is T03-owned; left untouched in T08.)
+
